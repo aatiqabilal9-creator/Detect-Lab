@@ -18,3 +18,5 @@ warn_unused_ignores = true
 [tool.pytest.ini_options]
 pythonpath = ["backend"]
 testpaths = ["tests"]
+[tool.vercel]
+entrypoint = "backend.app.main:app"
